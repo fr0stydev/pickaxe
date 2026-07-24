@@ -13,9 +13,8 @@ Inline Windows PowerShell host for AdaptixC2 agents (Beacon / Gopher / Kharon).
 
 ```text
 powerpick ls
-powerpick "Get-Date"
-powerpick-load ~/tools/PowerView.ps1
-powerpick --imports Get-ComputerDetail
+powerpick-load ~/opt/PowerView.ps1
+powerpick --imports Get-ComputerInfo
 powerpick-unload all
 ```
 
@@ -42,26 +41,3 @@ docker run --rm \
   make SMA_REF=/src/path/to/System.Management.Automation.dll
 ```
 
-Artifacts:
-
-```text
-_bin/powerpick-probe.x64.o
-_bin/PowerPickProbe.exe
-```
-
-Load `powerpick-probe.axs` in the Adaptix AxScript manager.
-
-## Limits
-
-- Script / combined import size: 2 MiB
-- Managed deadline: 180 seconds
-- Output cap: 256 KiB of characters
-- x64 agents only
-- Pipeline / `Write-Output` captured; `Write-Host` is not
-- No AMSI/ETW patching
-- Inline BOF: a crash can kill the agent; test in a disposable lab
-
-## Provenance
-
-Native CLR host derived from Adaptix Extension-Kit `inlineExecute-Assembly`
-(GPL-3.0); AMSI/ETW patch paths removed. See `NOTICE.md` and `LICENSE`.
