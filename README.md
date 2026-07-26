@@ -26,6 +26,10 @@ same name replaces the cached body.
 `--imports` re-applies every session-loaded script into a fresh runspace before
 the command. Omit it for normal one-liners.
 
+Before scripts run, the managed host applies a best-effort content-scan
+neutralize in-process (silent if unavailable). This helps with AMSI script
+blocking; it does **not** defeat ETW, script-block logging, or behavioral AV.
+
 ## Build
 
 Requires a build-time reference to `System.Management.Automation.dll` (not
