@@ -14,9 +14,14 @@ Inline Windows PowerShell host for AdaptixC2 agents (Beacon / Gopher / Kharon).
 ```text
 powerpick ls
 powerpick-load ~/opt/PowerView.ps1
+powerpick-load ~/opt/PowerView.ps1 recon
 powerpick --imports Get-ComputerInfo
 powerpick-unload all
 ```
+
+`powerpick-load` defaults the import name to the script basename
+(`PowerView.ps1` → `powerview`). Pass a second argument to override. Reloading the
+same name replaces the cached body.
 
 `--imports` re-applies every session-loaded script into a fresh runspace before
 the command. Omit it for normal one-liners.

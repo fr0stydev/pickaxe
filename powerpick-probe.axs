@@ -61,6 +61,50 @@ function powerpick_session_find(name) {
     return -1;
 }
 
+// Derive a session import name from the load command line path.
+// e.g. powerpick-load ~/opt/PowerView.ps1 → "powerview"
+function powerpick_default_import_name(cmdline) {
+    let rest = (cmdline || "").replace(/^\s*powerpick-load\s+/i, "").trim();
+    if (rest.length == 0) {
+        return "";
+    }
+
+    let path = "";
+    let quote = rest.charAt(0);
+    if (quote == '"' || quote == "'") {
+        let end = rest.indexOf(quote, 1);
+        if (end > 1) {
+            path = rest.substring(1, end);
+        }
+    } else {
+        let match = rest.match(/^(\S+)/);
+        if (match) {
+            path = match[1];
+        }
+    }
+
+    if (path.length == 0) {
+        return "";
+    }
+
+    path = path.replace(/\\/g, "/");
+    let slash = path.lastIndexOf("/");
+    let base = slash >= 0 ? path.substring(slash + 1) : path;
+    let dot = base.lastIndexOf(".");
+    if (dot > 0) {
+        base = base.substring(0, dot);
+    }
+
+    base = base.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+    if (base.length == 0) {
+        return "";
+    }
+    if (base.length > 64) {
+        base = base.substring(0, 64);
+    }
+    return base;
+}
+
 function powerpick_session_upsert(name, encoded) {
     let bytes = powerpick_b64_raw_bytes(encoded);
     if (bytes <= 0) {
@@ -226,7 +270,7 @@ cmd_powerpick_load.addArgFile(
 );
 cmd_powerpick_load.addArgString(
     "name",
-    "Session import name (defaults to module-N)",
+    "Session import name (defaults to the script basename)",
     ""
 );
 
@@ -237,6 +281,9 @@ cmd_powerpick_load.setPreHook(function (id, cmdline, parsed_json, ...parsed_line
     }
 
     let name = parsed_json["name"];
+    if (!name || name.length == 0) {
+        name = powerpick_default_import_name(cmdline);
+    }
     if (!name || name.length == 0) {
         name = "module-" + (powerpick_session_imports.length + 1);
     }

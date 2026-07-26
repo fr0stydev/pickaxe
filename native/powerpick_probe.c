@@ -923,19 +923,23 @@ void go(IN PCHAR buffer, IN ULONG blength)
         }
     }
 
-    //Get current stdout handle
+    //Get current stdout/stderr handles
     _GetStdHandle GetStdHandle = (_GetStdHandle) KERNEL32$GetProcAddress(KERNEL32$GetModuleHandleA("kernel32.dll"), "GetStdHandle");
     stdOutput = GetStdHandle(((DWORD)-11));
+    stdError = GetStdHandle(((DWORD)-12));
 
-    //Set stdout to our named pipe or mail slot
+    // Redirect both to the mailslot — managed errors used Console.Error
+    // and were previously dropped when only stdout was remapped.
     _SetStdHandle SetStdHandle = (_SetStdHandle) KERNEL32$GetProcAddress(KERNEL32$GetModuleHandleA("kernel32.dll"), "SetStdHandle");
     success = SetStdHandle(((DWORD)-11), ctx.hFile);
+    SetStdHandle(((DWORD)-12), ctx.hFile);
 
     //Create our AppDomain
     hr = ctx.pICorRuntimeHost->lpVtbl->CreateDomain(ctx.pICorRuntimeHost, (LPCWSTR)ctx.wAppDomain, NULL, &ctx.pAppDomainThunk);
     if (hr != S_OK) {
         BeaconPrintf(CALLBACK_ERROR, "[!] Failed to create AppDomain");
         SetStdHandle(((DWORD)-11), stdOutput);
+        SetStdHandle(((DWORD)-12), stdError);
         PerformCleanup(&ctx, frConsole);
         return;
     }
@@ -944,6 +948,7 @@ void go(IN PCHAR buffer, IN ULONG blength)
     if (hr != S_OK) {
         BeaconPrintf(CALLBACK_ERROR, "[!] Failed to query AppDomain interface");
         SetStdHandle(((DWORD)-11), stdOutput);
+        SetStdHandle(((DWORD)-12), stdError);
         PerformCleanup(&ctx, frConsole);
         return;
     }
@@ -956,6 +961,7 @@ void go(IN PCHAR buffer, IN ULONG blength)
     if (!ctx.pSafeArray) {
         BeaconPrintf(CALLBACK_ERROR, "[!] Failed to create SafeArray");
         SetStdHandle(((DWORD)-11), stdOutput);
+        SetStdHandle(((DWORD)-12), stdError);
         PerformCleanup(&ctx, frConsole);
         return;
     }
@@ -965,6 +971,7 @@ void go(IN PCHAR buffer, IN ULONG blength)
     if (hr != S_OK) {
         BeaconPrintf(CALLBACK_ERROR, "[!] Failed to access SafeArray data");
         SetStdHandle(((DWORD)-11), stdOutput);
+        SetStdHandle(((DWORD)-12), stdError);
         PerformCleanup(&ctx, frConsole);
         return;
     }
@@ -977,6 +984,7 @@ void go(IN PCHAR buffer, IN ULONG blength)
     if (hr != S_OK) {
         BeaconPrintf(CALLBACK_ERROR , "[!] Process refusing to load AppDomain of %ls CLR version. Try running an assembly that requires a differnt CLR version.\n", wNetVersion);
         SetStdHandle(((DWORD)-11), stdOutput);
+        SetStdHandle(((DWORD)-12), stdError);
         PerformCleanup(&ctx, frConsole);
         return;
     }
@@ -985,6 +993,7 @@ void go(IN PCHAR buffer, IN ULONG blength)
     if (hr != S_OK) {
         BeaconPrintf(CALLBACK_ERROR , "[!] Process refusing to find entry point of assembly.\n");
         SetStdHandle(((DWORD)-11), stdOutput);
+        SetStdHandle(((DWORD)-12), stdError);
         PerformCleanup(&ctx, frConsole);
         return;
     }
@@ -997,6 +1006,7 @@ void go(IN PCHAR buffer, IN ULONG blength)
     if (!ctx.psaStaticMethodArgs) {
         BeaconPrintf(CALLBACK_ERROR, "[!] Failed to create method args array");
         SetStdHandle(((DWORD)-11), stdOutput);
+        SetStdHandle(((DWORD)-12), stdError);
         PerformCleanup(&ctx, frConsole);
         return;
     }
@@ -1013,11 +1023,14 @@ void go(IN PCHAR buffer, IN ULONG blength)
 
     // Send output only if not already sent in chunks
     if (!ctx.useChunking) {
-        BeaconPrintf(CALLBACK_OUTPUT, "\n\n%s\n", ctx.returnData);
+        if (ctx.returnData[0] != '\0') {
+            BeaconPrintf(CALLBACK_OUTPUT, "%s", ctx.returnData);
+        }
     }
 
-    //Revert stdout back to original handles
+    //Revert stdout/stderr back to original handles
     SetStdHandle(((DWORD)-11), stdOutput);
+    SetStdHandle(((DWORD)-12), stdError);
 
     //Cleanup everything
     PerformCleanup(&ctx, frConsole);
