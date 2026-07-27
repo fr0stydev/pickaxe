@@ -229,12 +229,12 @@ function powerpick_run_drop(id, cmdline, names, task_message) {
 
 var cmd_powerpick = ax.create_command(
     "powerpick",
-    "Execute operator-supplied PowerShell through the inline BOF host",
-    "powerpick [--imports] \"Get-Date\""
+    "Run PowerShell in the agent process via the inline BOF host",
+    "powerpick [--imports] <powershell>"
 );
 cmd_powerpick.addArgBool(
     "--imports",
-    "Apply all session-loaded scripts before the command"
+    "Re-apply all session-loaded scripts before the expression"
 );
 cmd_powerpick.addArgString(
     "powershell",
@@ -260,18 +260,18 @@ cmd_powerpick.setPreHook(function (id, cmdline, parsed_json, ...parsed_lines) {
 
 var cmd_powerpick_load = ax.create_command(
     "powerpick-load",
-    "Load a local PowerShell script into the operator session and cache it on the agent",
-    "powerpick-load /path/to/module.ps1 [name]"
+    "Load a local PowerShell script into the session and cache it on the agent",
+    "powerpick-load <script.ps1> [name]"
 );
 cmd_powerpick_load.addArgFile(
     "script",
     true,
-    "Local path to a PowerShell script that defines functions"
+    "Local path to a PowerShell script (.ps1) that defines functions"
 );
 cmd_powerpick_load.addArgString(
     "name",
-    "Session import name (defaults to the script basename)",
-    ""
+    false,
+    "Optional session import name (default: script basename)"
 );
 
 cmd_powerpick_load.setPreHook(function (id, cmdline, parsed_json, ...parsed_lines) {
@@ -356,7 +356,7 @@ cmd_powerpick_load.setPreHook(function (id, cmdline, parsed_json, ...parsed_line
 
 var cmd_powerpick_loads = ax.create_command(
     "powerpick-loads",
-    "List PowerShell scripts loaded into the operator powerpick session",
+    "List PowerShell scripts currently loaded in the session",
     "powerpick-loads"
 );
 
@@ -390,13 +390,13 @@ cmd_powerpick_loads.setPreHook(function (id, cmdline, parsed_json, ...parsed_lin
 
 var cmd_powerpick_unload = ax.create_command(
     "powerpick-unload",
-    "Remove a session import by name, or all session imports",
+    "Remove a cached session import by name, or clear all imports",
     "powerpick-unload <name|all>"
 );
 cmd_powerpick_unload.addArgString(
     "name",
     true,
-    "Session import name, or 'all'"
+    "Import name to drop, or 'all' to clear every session import"
 );
 
 cmd_powerpick_unload.setPreHook(function (id, cmdline, parsed_json, ...parsed_lines) {
