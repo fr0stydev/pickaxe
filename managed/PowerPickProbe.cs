@@ -392,6 +392,11 @@ namespace PowerPickProbe
         // Keep potato / steal_token impersonation on the thread that runs SMA.
         // Default PowerShell runspaces hop to a thread-pool thread that drops the
         // impersonation token, so WindowsIdentity shows the process user.
+        //
+        // InitialSessionState's type initializer often throws under an elevated
+        // impersonation token inside a non-SYSTEM process — so we must create
+        // and open the runspace under the process primary token, then
+        // re-impersonate before Invoke.
         private static IntPtr TryDuplicateThreadToken()
         {
             IntPtr threadToken = IntPtr.Zero;
@@ -433,8 +438,6 @@ namespace PowerPickProbe
             string commandText,
             List<string> importTexts)
         {
-            PrepareContentScan();
-
             if (importTexts == null)
             {
                 importTexts = new List<string>();
@@ -454,20 +457,30 @@ namespace PowerPickProbe
                 }
             }
 
+            // Capture token first, then drop impersonation for SMA init.
             IntPtr impersonationToken = TryDuplicateThreadToken();
-            bool impersonating = false;
+            bool droppedImpersonation = false;
             if (impersonationToken != IntPtr.Zero)
             {
-                impersonating = ImpersonateLoggedOnUser(impersonationToken);
+                droppedImpersonation = RevertToSelf();
             }
 
+            bool impersonatingForInvoke = false;
             try
             {
+                PrepareContentScan();
+
                 using (Runspace runspace = RunspaceFactory.CreateRunspace())
                 {
-                    // Stay on the BOF thread so the impersonation token remains.
+                    // Stay on the BOF thread once we re-impersonate for Invoke.
                     runspace.ThreadOptions = PSThreadOptions.UseCurrentThread;
                     runspace.Open();
+
+                    if (impersonationToken != IntPtr.Zero)
+                    {
+                        impersonatingForInvoke =
+                            ImpersonateLoggedOnUser(impersonationToken);
+                    }
 
                     for (int index = 0; index < importTexts.Count; index++)
                     {
@@ -504,10 +517,17 @@ namespace PowerPickProbe
             }
             finally
             {
-                if (impersonating)
+                if (impersonatingForInvoke)
                 {
                     RevertToSelf();
                 }
+
+                // Restore agent impersonation (potato / steal_token) if we dropped it.
+                if (droppedImpersonation && impersonationToken != IntPtr.Zero)
+                {
+                    ImpersonateLoggedOnUser(impersonationToken);
+                }
+
                 if (impersonationToken != IntPtr.Zero)
                 {
                     CloseHandle(impersonationToken);
