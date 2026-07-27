@@ -15,8 +15,42 @@ namespace PowerPickProbe
         private const int OperatorOutputCharacters = 256 * 1024;
         private const int OperatorMaximumBytes = 2 * 1024 * 1024;
         private const uint PageExecuteReadWrite = 0x40;
+        private const uint TokenQuery = 0x0008;
+        private const uint TokenDuplicate = 0x0002;
+        private const uint TokenImpersonate = 0x0004;
+        private const int SecurityImpersonation = 2;
 
         private static bool contentScanPrepared;
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentThread();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool OpenThreadToken(
+            IntPtr threadHandle,
+            uint desiredAccess,
+            [MarshalAs(UnmanagedType.Bool)] bool openAsSelf,
+            out IntPtr tokenHandle);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool DuplicateToken(
+            IntPtr existingTokenHandle,
+            int impersonationLevel,
+            out IntPtr duplicateTokenHandle);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ImpersonateLoggedOnUser(IntPtr hToken);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool RevertToSelf();
 
         [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true)]
         private static extern IntPtr LoadLibraryA(string lpFileName);
@@ -355,6 +389,46 @@ namespace PowerPickProbe
             return imports;
         }
 
+        // Keep potato / steal_token impersonation on the thread that runs SMA.
+        // Default PowerShell runspaces hop to a thread-pool thread that drops the
+        // impersonation token, so WindowsIdentity shows the process user.
+        private static IntPtr TryDuplicateThreadToken()
+        {
+            IntPtr threadToken = IntPtr.Zero;
+            IntPtr duplicate = IntPtr.Zero;
+            try
+            {
+                if (!OpenThreadToken(
+                        GetCurrentThread(),
+                        TokenQuery | TokenDuplicate | TokenImpersonate,
+                        false,
+                        out threadToken))
+                {
+                    return IntPtr.Zero;
+                }
+
+                if (!DuplicateToken(threadToken, SecurityImpersonation, out duplicate))
+                {
+                    return IntPtr.Zero;
+                }
+
+                IntPtr result = duplicate;
+                duplicate = IntPtr.Zero;
+                return result;
+            }
+            finally
+            {
+                if (threadToken != IntPtr.Zero)
+                {
+                    CloseHandle(threadToken);
+                }
+                if (duplicate != IntPtr.Zero)
+                {
+                    CloseHandle(duplicate);
+                }
+            }
+        }
+
         private static int RunOperatorScriptTexts(
             string commandText,
             List<string> importTexts)
@@ -380,40 +454,63 @@ namespace PowerPickProbe
                 }
             }
 
-            using (Runspace runspace = RunspaceFactory.CreateRunspace())
+            IntPtr impersonationToken = TryDuplicateThreadToken();
+            bool impersonating = false;
+            if (impersonationToken != IntPtr.Zero)
             {
-                runspace.Open();
+                impersonating = ImpersonateLoggedOnUser(impersonationToken);
+            }
 
-                for (int index = 0; index < importTexts.Count; index++)
+            try
+            {
+                using (Runspace runspace = RunspaceFactory.CreateRunspace())
                 {
-                    int importResult = ImportScriptText(
-                        runspace,
-                        importTexts[index],
-                        OperatorTimeoutMilliseconds,
-                        OperatorOutputCharacters);
-                    // Timeout is fatal. Non-terminating Error-stream noise from
-                    // large modules (e.g. recon scripts) must not abort the run.
-                    if (importResult == 124)
+                    // Stay on the BOF thread so the impersonation token remains.
+                    runspace.ThreadOptions = PSThreadOptions.UseCurrentThread;
+                    runspace.Open();
+
+                    for (int index = 0; index < importTexts.Count; index++)
                     {
-                        WriteLineCaptured(
-                            String.Format(
-                                "Session import {0} timed out.",
-                                index + 1));
-                        return importResult;
+                        int importResult = ImportScriptText(
+                            runspace,
+                            importTexts[index],
+                            OperatorTimeoutMilliseconds,
+                            OperatorOutputCharacters);
+                        // Timeout is fatal. Non-terminating Error-stream noise from
+                        // large modules (e.g. recon scripts) must not abort the run.
+                        if (importResult == 124)
+                        {
+                            WriteLineCaptured(
+                                String.Format(
+                                    "Session import {0} timed out.",
+                                    index + 1));
+                            return importResult;
+                        }
+                    }
+
+                    using (PowerShell powerShell = PowerShell.Create())
+                    {
+                        powerShell.Runspace = runspace;
+                        powerShell.AddScript(
+                            commandText + " | Out-String -Width 4096",
+                            false);
+                        return InvokeBounded(
+                            powerShell,
+                            OperatorTimeoutMilliseconds,
+                            OperatorOutputCharacters,
+                            true);
                     }
                 }
-
-                using (PowerShell powerShell = PowerShell.Create())
+            }
+            finally
+            {
+                if (impersonating)
                 {
-                    powerShell.Runspace = runspace;
-                    powerShell.AddScript(
-                        commandText + " | Out-String -Width 4096",
-                        false);
-                    return InvokeBounded(
-                        powerShell,
-                        OperatorTimeoutMilliseconds,
-                        OperatorOutputCharacters,
-                        true);
+                    RevertToSelf();
+                }
+                if (impersonationToken != IntPtr.Zero)
+                {
+                    CloseHandle(impersonationToken);
                 }
             }
         }
